@@ -1,0 +1,46 @@
+---
+- name: NetBoxから自動で空きIPアドレスを取得するテスト
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    netbox_url: "http://localhost:8000"
+    # ⚠️ ご自身のAPIトークンをここに貼り付けてください
+    netbox_token: "***"
+    target_prefix: "***.***.***.***/***"
+    ip_description: "Ansible自動払い出しテスト"
+
+  tasks:
+    - name: 1. プレフィックスの文字列からNetBox内の内部IDを検索する
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/ipam/prefixes/?prefix={{ target_prefix | urlencode }}"
+        method: GET
+        status_code: 200
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+      register: prefix_search
+
+    - name: プレフィックスが存在するかチェック
+      ansible.builtin.fail:
+        msg: "NetBox内にプレフィックス {{ target_prefix }} が見つかりませんでした。画面で登録されているか確認してください。"
+      when: prefix_search.json.count == 0
+
+    - name: 2. 判明した内部IDを使って次に空いているIPを取得・登録する
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/ipam/prefixes/{{ prefix_search.json.results[0].id }}/available-ips/"
+        method: POST
+        status_code: 201
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Content-Type: "application/json"
+          Accept: "application/json"
+        body_format: json
+        body:
+          status: "active"
+          description: "{{ ip_description }}"
+      register: netbox_response
+
+    - name: 3. 取得したIPアドレスを表示する
+      ansible.builtin.debug:
+        msg: "お見事！次に空いていたIPアドレスは「 {{ netbox_response.json.address }} 」でした！"

@@ -1,0 +1,89 @@
+---
+- name: AI学習ジョブ（Pod）のIPアドレス・ライフサイクル管理シミュレーション
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    netbox_url: "http://localhost:8000"
+    # ⚠️ ご自身のAPIトークンをここに貼り付けてください
+    netbox_token: "***"
+    target_prefix: "***.***.***.***/***"
+
+    # K8sからOperatorが検知した「擬似的なPodのイベントデータ」
+    k8s_event_pod_name: "llm-training-job-pod-77"
+    k8s_event_node_name: "gpu-node-01"
+
+  tasks:
+    # =========================================================================
+    # フェーズ 1: 【Pod起動イベント検知】 NetBoxからIPを自動払い出し & 状態をActiveに
+    # =========================================================================
+    ## 1. まずプレフィックスの内部IDを取得
+    - name: "[PHASE 1: 起動] プレフィックスの内部IDを取得"
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/ipam/prefixes/?prefix={{ target_prefix | urlencode }}"
+        method: GET
+        status_code: 200
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+      register: prefix_search
+
+    ## 2. 空きIPを取得し、同時にPod名と稼働ノード名をメタデータとして書き込む
+    - name: "[PHASE 1: 起動] 次に空いているIPを 'active' として確保し、Pod情報を紐付け"
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/ipam/prefixes/{{ prefix_search.json.results[0].id }}/available-ips/"
+        method: POST
+        status_code: 201
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Content-Type: "application/json"
+          Accept: "application/json"
+        body_format: json
+        body:
+          status: "active"
+          address: "" # 空にすると自動選定されます
+          description: "K8s-Pod: {{ k8s_event_pod_name }}"
+          # カスタムコメント等にノード情報を記録
+          comments: "Running on Node: {{ k8s_event_node_name }}"
+      register: ip_allocated_response
+
+    - name: "[PHASE 1: 完了] 払い出されたIPアドレスの確認"
+      ansible.builtin.debug:
+        msg: "【Pod起動】 {{ k8s_event_pod_name }} に対し、IP: {{ ip_allocated_response.json.address }} を 'active' で確保しました。"
+
+    # =========================================================================
+    # フェーズ 2: 【Pod消滅イベント検知】 NetBoxのIPステータスを「解放（deprecated）」へ
+    # =========================================================================
+    ## 実際の運用では、数時間〜数日後にジョブが成功/失敗してPodが消滅したタイミングです
+    - name: "一時停止（シミュレーション用：3秒待機してPodの消滅イベントを発生させます）"
+      ansible.builtin.pause:
+        seconds: 3
+
+    ## 3. 該当のPod名が書かれたIPアドレスのIDをNetBoxから逆引き検索
+    - name: "[PHASE 2: 消滅] 消滅したPod名からNetBox内のIPレコードを検索"
+      ansible.builtin.uri:
+        # 💡 description の後ろに `__icontains` を付与して部分一致検索にします
+        url: "{{ netbox_url }}/api/ipam/ip-addresses/?description__icontains={{ k8s_event_pod_name | urlencode }}"
+        method: GET
+        status_code: 200
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+      register: ip_search_response
+
+    ## 4. ステータスを 'deprecated'（廃止/解放）に書き換え、次回自動で再利用できるようにする
+    - name: "[PHASE 2: 消滅] IPアドレスのステータスを 'deprecated' に変更してプールに返却"
+      ansible.builtin.uri:
+        # 💡 [0] を使うのをやめ、first フィルターで安全に最初の要素を取得します
+        url: "{{ netbox_url }}/api/ipam/ip-addresses/{{ (ip_search_response.json.results | first).id }}/"
+        method: PATCH
+        status_code: 200
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Content-Type: "application/json"
+          Accept: "application/json"
+        body_format: json
+        body:
+          status: "deprecated"
+          description: "Released: {{ k8s_event_pod_name }}"
+      register: ip_released_response
