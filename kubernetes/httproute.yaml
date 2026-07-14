@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: nginx-route
+  namespace: default
+spec:
+  parentRefs:
+  - name: my-gateway # ステップ3で作ったGatewayに紐付ける
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /     # 「/」から始まるURLへのアクセスすべて
+    backendRefs:
+    - name: nginx-nodeport-service # 昨日作ったNginxのService名
+      port: 80

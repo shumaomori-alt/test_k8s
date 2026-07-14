@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-nodeport-service
+spec:
+  type: NodePort       # ← ここが今日の主役！NodePortを指定
+  selector:
+    app: nginx
+  ports:
+    - protocol: TCP
+      port: 80         # クラスター内部向けのポート
+      targetPort: 80   # コンテナ（Pod）側のポート
+      nodePort: 30080  # 各ワーカーノードのOSが「外向け」に開放するポート（30000-32767の間で指定）
