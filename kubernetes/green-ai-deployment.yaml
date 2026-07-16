@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: green-ai-service
+  namespace: default
+  labels:
+    app: green-ai-service
+spec:
+  replicas: 1 # 🌟最初は1台で起動します
+  selector:
+    matchLabels:
+      app: green-ai-service
+  template:
+    metadata:
+      labels:
+        app: green-ai-service
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80

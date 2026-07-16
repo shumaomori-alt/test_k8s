@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-predictive-engine
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-predictive-engine
+  template:
+    metadata:
+      labels:
+        app: ai-predictive-engine
+      annotations:
+        # 🌟PrometheusにこのAIシミュレーターの8000ポートから数値を集めるよう指示
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+    spec:
+      containers:
+      - name: predictor
+        image: python:3.10-slim
+        # インラインで必要なライブラリを入れてスクリプトを実行する力技コマンド
+        command: ["sh", "-c"]
+        args:
+        - |
+          pip install requests prometheus_client
+          cat << 'EOF' > /app.py
+          import time
+          import requests
+          from prometheus_client import start_http_server, Gauge
+          
+          # 1. Prometheusに公開する「AI予測メトリクス」を定義
+          PREDICTED_ENERGY = Gauge('predicted_excess_energy_watts', 'AI-predicted excess energy in 30 minutes')
+          
+          # クラスター内部のPrometheus APIのURL
+          PROMETHEUS_URL = "http://prometheus-server.monitoring.svc.cluster.local:80/api/v1/query"
+          
+          def get_current_generation():
+              try:
+                  # Prometheusから現在のリアルタイム発電量（リクエスト数）を取得
+                  response = requests.get(PROMETHEUS_URL, params={'query': 'sum(http_requests_total{namespace="monitoring"})'})
+                  results = response.json()['data']['result']
+                  if results:
+                      return float(results[0]['value'][1])
+              except Exception as e:
+                  print(f"Error fetching data from Prometheus: {e}")
+              return 0.0
+          
+          def predict_future_energy(current_val):
+              """
+              🧠 【AIダミー予測ロジック】
+              今回は「現在の値が少しでもあれば、30分後は本格的に晴れて1.5倍の電力が得られる」
+              という『先回り予測』をシミュレートします。
+              """
+              if current_val > 0:
+                  return current_val * 1.5
+              return 0.0
+          
+          if __name__ == '__main__':
+              # 予測結果を 8000 ポートで Prometheus 向けに公開
+              start_http_server(8000)
+              print("AI Predictive Simulator started on port 8000...")
+              
+              while True:
+                  current_power = get_current_generation()
+                  # 30分後の予測値を計算
+                  predicted_power = predict_future_energy(current_power)
+                  
+                  # 予測メトリクスを更新
+                  PREDICTED_ENERGY.set(predicted_power)
+                  print(f"Current Raw: {current_power} -> AI Predicted (30m later): {predicted_power}")
+                  
+                  time.sleep(10) # 10秒ごとに更新
+          EOF
+          python /app.py
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-predictive-engine
+  namespace: monitoring
+spec:
+  ports:
+  - port: 8000
+    targetPort: 8000
+  selector:
+    app: ai-predictive-engine
